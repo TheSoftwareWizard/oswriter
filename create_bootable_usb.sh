@@ -8,7 +8,8 @@
 # from the terminal, automatically detecting connected USB drives and
 # guiding the user through an interactive menu.
 
-set -e  # Stop the script if any error occurs
+# Stop the script if any error occurs
+set -e
 
 # Colors for better presentation
 RED='\033[0;31m'
@@ -19,7 +20,7 @@ NC='\033[0m' # No Color
 
 # Function to display formatted messages
 show_message() {
-    echo -e "${2}${1}${NC}"
+    echo -e "${2}${1}${NC}" >&2
 }
 
 # Function to show script header with author and project info
@@ -102,12 +103,10 @@ select_usb_drive() {
     
     # Display a clear warning about system disks
     show_message "IMPORTANT: This script will only show USB devices for safety." "$RED"
-    echo ""
+    echo "" >&2
     
     # Filter to remove any system disk from the list
     for drive in "${drives[@]}"; do
-        is_system_disk=false
-        
         # Explicitly skip any NVMe devices
         if [[ $drive == nvme* ]]; then
             continue
@@ -147,23 +146,27 @@ select_usb_drive() {
         show_message "- Model: $model" "$YELLOW"
         
         # Add confirmation to use this drive
-        read -p "Do you want to use this drive? (y/n): " confirm
-        if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -n "Do you want to use this drive? (y/n): " >&2
+        read confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            # Fix: Debug the value being returned
+            show_message "Selected drive: /dev/${drives[0]}" "$GREEN"
+            # Fix: Ensure we properly return the device path
+            echo "/dev/${drives[0]}"
+            return 0
+        else
             show_message "Operation canceled by the user." "$YELLOW"
             exit 0
         fi
-        
-        # Set the selected drive explicitly
-        echo "/dev/${drives[0]}"
-        return 0
     else
         show_message "Multiple USB drives detected. Please select one:" "$BLUE"
         for i in "${!drives[@]}"; do
-            echo "[$i] /dev/${drives[$i]} ($(lsblk -d -n -o SIZE,MODEL /dev/${drives[$i]} | tr -s ' '))"
+            echo "[$i] /dev/${drives[$i]} ($(lsblk -d -n -o SIZE,MODEL /dev/${drives[$i]} | tr -s ' '))" >&2
         done
         
         while true; do
-            read -p "Enter the number of the USB drive you want to use: " selection
+            echo -n "Enter the number of the USB drive you want to use: " >&2
+            read selection
             if [[ "$selection" =~ ^[0-9]+$ ]] && [ "$selection" -lt "${#drives[@]}" ]; then
                 show_message "You selected: /dev/${drives[$selection]}" "$GREEN"
                 
@@ -177,7 +180,8 @@ select_usb_drive() {
                 show_message "- Size: $size" "$YELLOW"
                 show_message "- Model: $model" "$YELLOW"
                 
-                read -p "Are you SURE you want to continue? (type 'CONFIRM' to proceed): " final_confirm
+                echo -n "Are you SURE you want to continue? (type 'CONFIRM' to proceed): " >&2
+                read final_confirm
                 if [ "$final_confirm" = "CONFIRM" ]; then
                     # Return the selected drive explicitly
                     echo "/dev/${drives[$selection]}"
@@ -196,17 +200,29 @@ select_usb_drive() {
 # Function to display the operating system menu
 show_os_menu() {
     show_message "Select the operating system you want to install:" "$BLUE"
-    echo "1) Ubuntu/Debian/Other Linux distributions (ISO)"
-    echo "2) Windows (ISO)"
-    echo "3) Ventoy (for multiple operating systems)"
-    echo "4) Custom image (using dd)"
-    echo "0) Exit"
     
+    # Print menu options directly to stderr to avoid capturing in function output
+    cat << EOF >&2
+1) Ubuntu/Debian/Other Linux distributions (ISO)
+2) Windows (ISO)
+3) Ventoy (for multiple operating systems)
+4) Custom image (using dd)
+0) Exit
+EOF
+    
+    # Get user choice - store in separate variable to avoid capturing menu text
+    local choice=""
     while true; do
-        read -p "Enter your choice (0-4): " os_choice
-        case $os_choice in
-            [0-4]) echo $os_choice; return ;;
-            *) show_message "Invalid option. Please try again." "$RED" ;;
+        read -p "Enter your choice (0-4): " choice >&2
+        case "$choice" in
+            [0-4]) 
+                # Only return the number, nothing else
+                echo "$choice"
+                return 
+                ;;
+            *) 
+                show_message "Invalid option. Please try again." "$RED" 
+                ;;
         esac
     done
 }
@@ -253,13 +269,14 @@ create_linux_usb() {
     local iso_path="$2"
     
     show_message "Creating bootable USB for Linux..." "$BLUE"
-    show_message "This process will erase ALL data on $usb_drive" "$RED"
+    show_message "WARNING: This process will FORMAT and erase ALL data on $usb_drive" "$RED"
     read -p "Are you sure you want to continue? (y/n): " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         show_message "Operation canceled by the user." "$YELLOW"
         return 1
     fi
     
+    show_message "Formatting and preparing drive..." "$YELLOW"
     show_message "Copying the ISO image to the USB drive. Please wait..." "$BLUE"
     
     # Use dd to copy the image
@@ -293,13 +310,14 @@ create_windows_usb() {
     fi
     
     show_message "Creating bootable USB for Windows..." "$BLUE"
-    show_message "This process will erase ALL data on $usb_drive" "$RED"
+    show_message "WARNING: This process will FORMAT and erase ALL data on $usb_drive" "$RED"
     read -p "Are you sure you want to continue? (y/n): " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         show_message "Operation canceled by the user." "$YELLOW"
         return 1
     fi
     
+    show_message "Formatting and preparing drive..." "$YELLOW"
     show_message "Copying the ISO image to the USB drive. This process may take a long time..." "$BLUE"
     
     # Use WoeUSB to create the Windows bootable USB
@@ -331,7 +349,7 @@ install_ventoy() {
     fi
     
     show_message "Installing Ventoy on the USB drive..." "$BLUE"
-    show_message "This process will erase ALL data on $usb_drive" "$RED"
+    show_message "WARNING: This process will FORMAT and erase ALL data on $usb_drive" "$RED"
     read -p "Are you sure you want to continue? (y/n): " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         show_message "Operation canceled by the user." "$YELLOW"
@@ -341,7 +359,10 @@ install_ventoy() {
     # Install Ventoy
     ventoy -i "$usb_drive"
     
-    if [ $? -eq 0 ]; then
+    # Capture return code explicitly
+    local ventoy_result=$?
+    
+    if [ $ventoy_result -eq 0 ]; then
         show_message "Ventoy successfully installed on $usb_drive!" "$GREEN"
         show_message "You can now copy ISO images directly to the Ventoy partition." "$GREEN"
         return 0
@@ -357,13 +378,14 @@ create_custom_usb() {
     local img_path="$2"
     
     show_message "Creating bootable USB with custom image..." "$BLUE"
-    show_message "This process will erase ALL data on $usb_drive" "$RED"
+    show_message "WARNING: This process will FORMAT and erase ALL data on $usb_drive" "$RED"
     read -p "Are you sure you want to continue? (y/n): " confirm
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
         show_message "Operation canceled by the user." "$YELLOW"
         return 1
     fi
     
+    show_message "Formatting and preparing drive..." "$YELLOW"
     show_message "Copying the image to the USB drive. Please wait..." "$BLUE"
     
     # Use dd to copy the image
@@ -393,33 +415,57 @@ main() {
     # Detect USB drives
     detect_usb_drives
     
-    # Select USB drive - go directly to selection
+    # Select USB drive - IMPORTANT: Capture only the last line output by the function
     usb_drive=$(select_usb_drive)
     
     # Additional check to ensure usb_drive has a valid value
     if [ -z "$usb_drive" ] || [[ ! "$usb_drive" == /dev/* ]]; then
-        show_message "Error: No valid USB drive selected." "$RED"
+        show_message "Error: No valid USB drive selected (got: $usb_drive)." "$RED"
         exit 1
     fi
     
-    # Show operating system menu
+    # Show that we're using the selected drive
+    show_message "Using drive: $usb_drive" "$GREEN"
+    
+    # Show operating system menu - STORE ONLY THE NUMBER
     os_choice=$(show_os_menu)
     
     # Variable to store the ISO image path
     iso_path=""
     
     # Process according to user's choice
-    case $os_choice in
-        0)
+    case "$os_choice" in
+        "0")
             show_message "Exiting the script. Goodbye!" "$GREEN"
             exit 0
             ;;
-        1|2|4)
-            # Linux, Windows, or custom image
+        "1"|"2"|"4")
+            # Linux, Windows, or custom image - MAKE SURE THIS PROMPT IS DISPLAYED
+            echo -e "\nYou'll need to provide an ISO file for the installation."
             while true; do
                 read -p "Enter the full path to the ISO image: " iso_path
-                # Expand ~ to the home path if it exists
-                iso_path="${iso_path/#\~/$HOME}"
+                
+                # Better path handling - handle relative paths and tilde expansion
+                if [[ "$iso_path" == ~* ]]; then
+                    # Handle paths with tilde
+                    if [ -n "$SUDO_USER" ]; then
+                        USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+                        iso_path="${iso_path/#\~/$USER_HOME}"
+                    else
+                        iso_path="${iso_path/#\~/$HOME}"
+                    fi
+                elif [[ "$iso_path" != /* ]]; then
+                    # Handle relative paths when running as root
+                    if [ -n "$SUDO_USER" ]; then
+                        USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+                        iso_path="$USER_HOME/$iso_path"
+                    else
+                        iso_path="$HOME/$iso_path"
+                    fi
+                fi
+                
+                # Show the expanded path for debugging
+                show_message "Looking for ISO at: $iso_path" "$BLUE"
                 
                 if verify_iso "$iso_path"; then
                     break
@@ -428,20 +474,27 @@ main() {
                 fi
             done
             
-            case $os_choice in
-                1) create_linux_usb "$usb_drive" "$iso_path" ;;
-                2) create_windows_usb "$usb_drive" "$iso_path" ;;
-                4) create_custom_usb "$usb_drive" "$iso_path" ;;
+            case "$os_choice" in
+                "1") create_linux_usb "$usb_drive" "$iso_path" ;;
+                "2") create_windows_usb "$usb_drive" "$iso_path" ;;
+                "4") create_custom_usb "$usb_drive" "$iso_path" ;;
             esac
             ;;
-        3)
+        "3")
             # Install Ventoy
             install_ventoy "$usb_drive"
             ;;
+        *)
+            show_message "Invalid option: $os_choice" "$RED"
+            exit 1
+            ;;
     esac
     
+    # Explicitly capture operation result to prevent premature script exit
+    operation_result=$?
+    
     # Check if the operation was successful
-    if [ $? -ne 0 ]; then
+    if [ $operation_result -ne 0 ]; then
         show_message "There was an error during the operation." "$RED"
         exit 1
     fi
@@ -449,26 +502,26 @@ main() {
     show_message "===== SUMMARY =====" "$GREEN"
     show_message "Operation completed on drive: $usb_drive" "$GREEN"
     
-    case $os_choice in
-        1) 
+    case "$os_choice" in
+        "1") 
             show_message "Operating system: Linux" "$GREEN"
             show_message "Image used: $iso_path" "$GREEN"
             if [ -f "$iso_path" ]; then
                 show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
             fi
             ;;
-        2) 
+        "2") 
             show_message "Operating system: Windows" "$GREEN"
             show_message "Image used: $iso_path" "$GREEN"
             if [ -f "$iso_path" ]; then
                 show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
             fi
             ;;
-        3) 
+        "3") 
             show_message "Ventoy installation completed" "$GREEN"
             show_message "You can copy multiple ISOs to the Ventoy partition" "$GREEN"
             ;;
-        4) 
+        "4") 
             show_message "Custom image" "$GREEN"
             show_message "Image used: $iso_path" "$GREEN"
             if [ -f "$iso_path" ]; then
