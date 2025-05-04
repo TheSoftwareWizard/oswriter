@@ -433,6 +433,106 @@ create_custom_usb() {
     fi
 }
 
+# Function to check for updates
+check_for_updates() {
+    show_message "Checking for updates..." "$BLUE"
+    
+    # Get the current script path
+    local current_script="$0"
+    
+    # Check if we're running the installed version
+    if [[ "$current_script" == "/usr/local/bin/oswriter" || "$current_script" == "/usr/local/bin/create_bootable_usb" ]]; then
+        # We're running the installed version, we can update
+        show_message "Downloading the latest version..." "$YELLOW"
+        
+        # Create temporary directory
+        local temp_dir=$(mktemp -d)
+        
+        # Clone the repository or download specific files
+        if command -v git &> /dev/null; then
+            # Use git if available
+            if git clone --depth 1 https://github.com/TheSoftwareWizard/oswriter.git "$temp_dir/repo" 2>/dev/null; then
+                show_message "Downloaded the latest version from GitHub." "$GREEN"
+                
+                # Check if the version is different
+                if diff -q "$current_script" "$temp_dir/repo/create_bootable_usb.sh" >/dev/null; then
+                    show_message "You already have the latest version." "$GREEN"
+                    rm -rf "$temp_dir"
+                    return 0
+                else
+                    # Copy the new version
+                    show_message "Installing the new version..." "$YELLOW"
+                    cp "$temp_dir/repo/create_bootable_usb.sh" "$current_script"
+                    chmod +x "$current_script"
+                    show_message "Update completed successfully!" "$GREEN"
+                    show_message "Please restart the script to use the new version." "$GREEN"
+                    rm -rf "$temp_dir"
+                    exit 0
+                fi
+            else
+                show_message "Failed to download from GitHub using git." "$YELLOW"
+            fi
+        fi
+        
+        # Alternative: use curl as fallback
+        show_message "Downloading using curl..." "$YELLOW"
+        if curl -s -o "$temp_dir/create_bootable_usb.sh" https://raw.githubusercontent.com/TheSoftwareWizard/oswriter/master/create_bootable_usb.sh; then
+            # Check if the version is different
+            if diff -q "$current_script" "$temp_dir/create_bootable_usb.sh" >/dev/null; then
+                show_message "You already have the latest version." "$GREEN"
+                rm -rf "$temp_dir"
+                return 0
+            else
+                # Copy the new version
+                show_message "Installing the new version..." "$YELLOW"
+                cp "$temp_dir/create_bootable_usb.sh" "$current_script"
+                chmod +x "$current_script"
+                show_message "Update completed successfully!" "$GREEN"
+                show_message "Please restart the script to use the new version." "$GREEN"
+                rm -rf "$temp_dir"
+                exit 0
+            fi
+        else
+            show_message "Failed to download the update." "$RED"
+            show_message "Please check your internet connection and try again." "$YELLOW"
+            rm -rf "$temp_dir"
+            return 1
+        fi
+    else
+        # We're running from a custom location
+        show_message "You are not running the installed version." "$YELLOW"
+        show_message "Updates are only available for the installed version." "$YELLOW"
+        show_message "Run 'sudo oswriter' or 'sudo create_bootable_usb' to use the installed version." "$YELLOW"
+        return 1
+    fi
+}
+
+# Show the main menu and get user's choice
+show_main_menu() {
+    show_message "What would you like to do?" "$BLUE"
+    
+    cat << EOF >&2
+1) Create a bootable USB drive
+2) Check for updates
+0) Exit
+EOF
+    
+    # Get user choice
+    local choice=""
+    while true; do
+        read -p "Enter your choice (0-2): " choice >&2
+        case "$choice" in
+            [0-2]) 
+                echo "$choice"
+                return 
+                ;;
+            *) 
+                show_message "Invalid option. Please try again." "$RED" 
+                ;;
+        esac
+    done
+}
+
 # Main function
 main() {
     # Show header with author/project info
@@ -443,6 +543,62 @@ main() {
     
     # Check dependencies
     check_dependencies
+    
+    # Check for auto-updates if installed version and AUTO_UPDATE is enabled
+    if [[ "$0" == "/usr/local/bin/oswriter" || "$0" == "/usr/local/bin/create_bootable_usb" ]]; then
+        # Only check once a day to avoid slowing down the script
+        last_update_check="/tmp/oswriter_update_check"
+        current_date=$(date +%Y%m%d)
+        
+        # Check if we should verify updates today
+        if [ ! -f "$last_update_check" ] || [ "$(cat "$last_update_check")" != "$current_date" ]; then
+            show_message "Checking for updates..." "$BLUE"
+            
+            # Create temporary directory
+            temp_update_dir=$(mktemp -d)
+            
+            # Try to download the latest version
+            if curl -s -o "$temp_update_dir/create_bootable_usb.sh" https://raw.githubusercontent.com/TheSoftwareWizard/oswriter/master/create_bootable_usb.sh 2>/dev/null; then
+                # Check if the version is different
+                if ! diff -q "$0" "$temp_update_dir/create_bootable_usb.sh" >/dev/null; then
+                    show_message "A new version is available. Updating..." "$YELLOW"
+                    cp "$temp_update_dir/create_bootable_usb.sh" "$0"
+                    chmod +x "$0"
+                    show_message "Update completed successfully! Restarting..." "$GREEN"
+                    rm -rf "$temp_update_dir"
+                    echo "$current_date" > "$last_update_check"
+                    exec "$0" "$@"
+                    exit 0
+                fi
+            fi
+            
+            # Clean up
+            rm -rf "$temp_update_dir"
+            echo "$current_date" > "$last_update_check"
+        fi
+    fi
+    
+    # Show main menu first
+    local main_choice=$(show_main_menu)
+    
+    case "$main_choice" in
+        "0")
+            show_message "Exiting the script. Goodbye!" "$GREEN"
+            exit 0
+            ;;
+        "1")
+            # Create bootable USB - Continue with existing code
+            ;;
+        "2")
+            # Check for updates
+            check_for_updates
+            exit 0
+            ;;
+        *)
+            show_message "Invalid option. Exiting." "$RED"
+            exit 1
+            ;;
+    esac
     
     # Detect USB drives
     detect_usb_drives
