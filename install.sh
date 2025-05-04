@@ -3,6 +3,8 @@
 # OSWriter Installation Script
 # Author: TheSoftwareWizard
 # Project: oswriter - https://github.com/TheSoftwareWizard/oswriter
+# Version: 0.4.1
+# License: MIT
 #
 # This script installs the OSWriter tool for creating bootable USB drives
 
@@ -25,6 +27,34 @@ check_root() {
         show_message "Please run it with sudo: sudo bash install.sh" "$YELLOW"
         exit 1
     fi
+}
+
+# Uninstall OSWriter
+uninstall_oswriter() {
+    show_message "===== OSWRITER UNINSTALLER =====" "$BLUE"
+    show_message "This will remove OSWriter from your system." "$BLUE"
+    echo ""
+    
+    # Check root privileges
+    check_root
+    
+    # Remove installed files
+    if [ -f "/usr/local/bin/oswriter" ]; then
+        rm -f "/usr/local/bin/oswriter"
+        show_message "Removed /usr/local/bin/oswriter" "$GREEN"
+    fi
+    
+    if [ -L "/usr/local/bin/create_bootable_usb" ]; then
+        rm -f "/usr/local/bin/create_bootable_usb"
+        show_message "Removed /usr/local/bin/create_bootable_usb" "$GREEN"
+    fi
+    
+    if [ -d "/etc/oswriter" ]; then
+        rm -rf "/etc/oswriter"
+        show_message "Removed /etc/oswriter directory" "$GREEN"
+    fi
+    
+    show_message "OSWriter has been successfully uninstalled!" "$GREEN"
 }
 
 # Main installation function
@@ -54,12 +84,42 @@ install_oswriter() {
     else
         # Try to download from GitHub if not running from repo
         show_message "Downloading latest version of OSWriter..." "$YELLOW"
-        curl -s https://raw.githubusercontent.com/TheSoftwareWizard/oswriter/master/create_bootable_usb.sh -o "$install_dir/oswriter"
+        curl -s -L https://raw.githubusercontent.com/TheSoftwareWizard/oswriter/master/create_bootable_usb.sh -o "$install_dir/oswriter"
         
         if [ $? -ne 0 ]; then
-            show_message "Error: Failed to download OSWriter script." "$RED"
-            show_message "Please check your internet connection and try again." "$YELLOW"
-            exit 1
+            # Try alternate method - download whole repository
+            show_message "Direct download failed. Trying alternate method..." "$YELLOW"
+            tmp_dir=$(mktemp -d)
+            curl -s -L https://github.com/TheSoftwareWizard/oswriter/archive/refs/heads/master.zip -o "$tmp_dir/oswriter.zip"
+            
+            if [ $? -ne 0 ]; then
+                show_message "Error: Failed to download OSWriter." "$RED"
+                show_message "Please check your internet connection and try again." "$YELLOW"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            
+            # Check if unzip is installed
+            if ! command -v unzip &> /dev/null; then
+                show_message "Unzip is required but not installed. Please install it first:" "$RED"
+                show_message "For Fedora: sudo dnf install unzip" "$YELLOW"
+                show_message "For Ubuntu/Debian: sudo apt install unzip" "$YELLOW"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            
+            unzip -q "$tmp_dir/oswriter.zip" -d "$tmp_dir"
+            if [ -f "$tmp_dir/oswriter-master/create_bootable_usb.sh" ]; then
+                cp "$tmp_dir/oswriter-master/create_bootable_usb.sh" "$install_dir/oswriter"
+                show_message "Successfully downloaded and extracted OSWriter." "$GREEN"
+            else
+                show_message "Error: Could not find the required files in the downloaded package." "$RED"
+                rm -rf "$tmp_dir"
+                exit 1
+            fi
+            
+            # Clean up
+            rm -rf "$tmp_dir"
         fi
     fi
     
@@ -83,7 +143,8 @@ install_oswriter() {
     if [ ${#missing_deps[@]} -gt 0 ]; then
         show_message "Missing required dependencies: ${missing_deps[*]}" "$RED"
         show_message "Please install them using your package manager." "$YELLOW"
-        show_message "For example: sudo apt install ${missing_deps[*]}" "$YELLOW"
+        show_message "For Fedora: sudo dnf install ${missing_deps[*]}" "$YELLOW"
+        show_message "For Ubuntu/Debian: sudo apt install ${missing_deps[*]}" "$YELLOW"
     fi
     
     # Optional dependencies
@@ -112,5 +173,12 @@ install_oswriter() {
     show_message "Thank you for installing OSWriter!" "$BLUE"
 }
 
-# Run the installation
-install_oswriter 
+# Parse command line arguments
+case "$1" in
+    "uninstall")
+        uninstall_oswriter
+        ;;
+    *)
+        install_oswriter
+        ;;
+esac 
