@@ -3,6 +3,8 @@
 # create_bootable_usb.sh - Script for creating bootable USB drives
 # Author: TheSoftwareWizard
 # Project: oswriter - https://github.com/TheSoftwareWizard/oswriter
+# Version: 0.4.1
+# License: MIT
 #
 # This script allows creating bootable USB drives for different operating systems
 # from the terminal, automatically detecting connected USB drives and
@@ -32,6 +34,8 @@ show_header() {
     echo ""
     show_message "Author: TheSoftwareWizard" "$GREEN"
     show_message "Project: oswriter - https://github.com/TheSoftwareWizard/oswriter" "$GREEN"
+    show_message "Version: 0.4.1" "$GREEN"
+    show_message "License: MIT" "$GREEN"
     echo ""
 }
 
