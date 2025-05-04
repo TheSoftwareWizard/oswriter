@@ -45,13 +45,22 @@ install_oswriter() {
     mkdir -p "$config_dir"
     
     # Download the latest version of the script
-    show_message "Downloading latest version of OSWriter..." "$YELLOW"
-    curl -s https://raw.githubusercontent.com/TheSoftwareWizard/oswriter/master/create_bootable_usb.sh -o "$install_dir/oswriter"
-    
-    if [ $? -ne 0 ]; then
-        show_message "Error: Failed to download OSWriter script." "$RED"
-        show_message "Please check your internet connection and try again." "$YELLOW"
-        exit 1
+    show_message "Installing OSWriter..." "$YELLOW"
+
+    # Check if we're running from the repository
+    if [ -f "./create_bootable_usb.sh" ]; then
+        show_message "Found local script file, installing from local copy..." "$GREEN"
+        cp "./create_bootable_usb.sh" "$install_dir/oswriter"
+    else
+        # Try to download from GitHub if not running from repo
+        show_message "Downloading latest version of OSWriter..." "$YELLOW"
+        curl -s https://raw.githubusercontent.com/TheSoftwareWizard/oswriter/master/create_bootable_usb.sh -o "$install_dir/oswriter"
+        
+        if [ $? -ne 0 ]; then
+            show_message "Error: Failed to download OSWriter script." "$RED"
+            show_message "Please check your internet connection and try again." "$YELLOW"
+            exit 1
+        fi
     fi
     
     # Make the script executable
