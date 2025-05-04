@@ -309,6 +309,16 @@ create_windows_usb() {
         return 1
     fi
     
+    # Check if ISO is larger than drive
+    local iso_size=$(du -b "$iso_path" | cut -f1)
+    local drive_size=$(lsblk -b -d -n -o SIZE "$usb_drive")
+    
+    if [ "$iso_size" -gt "$drive_size" ]; then
+        show_message "Error: The ISO image ($(du -h "$iso_path" | cut -f1)) is larger than your USB drive ($(lsblk -d -n -o SIZE "$usb_drive"))." "$RED"
+        show_message "Please use a larger USB drive or a smaller ISO image." "$YELLOW"
+        return 1
+    fi
+    
     show_message "Creating bootable USB for Windows..." "$BLUE"
     show_message "WARNING: This process will FORMAT and erase ALL data on $usb_drive" "$RED"
     read -p "Are you sure you want to continue? (y/n): " confirm
@@ -320,19 +330,41 @@ create_windows_usb() {
     show_message "Formatting and preparing drive..." "$YELLOW"
     show_message "Copying the ISO image to the USB drive. This process may take a long time..." "$BLUE"
     
-    # Use WoeUSB to create the Windows bootable USB
+    # Create a temporary file for the WoeUSB output
+    local temp_output_file=$(mktemp)
+    
+    # Use WoeUSB to create the Windows bootable USB and save output
     if [ "$woeusb_cmd" = "woeusb" ]; then
-        "$woeusb_cmd" --target-filesystem NTFS --device "$iso_path" "$usb_drive"
+        "$woeusb_cmd" --target-filesystem NTFS --device "$iso_path" "$usb_drive" 2>&1 | tee "$temp_output_file"
     else
-        "$woeusb_cmd" --target "$usb_drive" --source "$iso_path" --target-filesystem ntfs
+        "$woeusb_cmd" --target "$usb_drive" --source "$iso_path" --target-filesystem ntfs 2>&1 | tee "$temp_output_file"
     fi
     
-    if [ $? -eq 0 ]; then
-        sync
+    # Capture the exit code
+    local woeusb_result=${PIPESTATUS[0]}
+    
+    # Also check for specific error strings in the output
+    grep -q "Error:" "$temp_output_file"
+    local error_found=$?
+    
+    # Remove the temporary file
+    rm "$temp_output_file"
+    
+    # Sync to ensure all writes are complete
+    sync
+    
+    if [ $woeusb_result -eq 0 ] && [ $error_found -ne 0 ]; then
         show_message "Windows bootable USB created successfully!" "$GREEN"
         return 0
     else
-        show_message "Error creating the Windows bootable USB." "$RED"
+        show_message "Error: Failed to create Windows bootable USB." "$RED"
+        
+        if [ "$iso_size" -gt "$((drive_size * 9 / 10))" ]; then
+            show_message "The ISO may be too large for this USB drive." "$YELLOW"
+            show_message "ISO size: $(du -h "$iso_path" | cut -f1)" "$YELLOW"
+            show_message "USB drive size: $(lsblk -d -n -o SIZE "$usb_drive")" "$YELLOW"
+        fi
+        
         return 1
     fi
 }
@@ -442,8 +474,44 @@ main() {
         "1"|"2"|"4")
             # Linux, Windows, or custom image - MAKE SURE THIS PROMPT IS DISPLAYED
             echo -e "\nYou'll need to provide an ISO file for the installation."
+            
+            # Use a named temporary file that's easy to clean up
+            TMP_SCRIPT="/tmp/oswriter_input_$$"
+            cat > "$TMP_SCRIPT" << 'EOF'
+#!/bin/bash
+
+# Enable tab completion in a more compatible way
+if [[ $- == *i* ]]; then
+    # Only execute these in an interactive shell
+    bind "set completion-ignore-case on" 2>/dev/null
+    bind "set completion-map-case on" 2>/dev/null
+    bind "set show-all-if-ambiguous on" 2>/dev/null
+    bind "set menu-complete-display-prefix on" 2>/dev/null
+fi
+
+# Force bash to use readline
+INPUTRC_TMP=$(mktemp)
+cat > "$INPUTRC_TMP" << 'INNEREOF'
+set completion-ignore-case on
+set completion-map-case on
+set show-all-if-ambiguous on
+set menu-complete-display-prefix on
+INNEREOF
+
+export INPUTRC="$INPUTRC_TMP"
+read -e -p "Enter the full path to the ISO image: " iso_path
+rm -f "$INPUTRC_TMP"
+echo "$iso_path"
+EOF
+            chmod +x "$TMP_SCRIPT"
+            
             while true; do
-                read -p "Enter the full path to the ISO image: " iso_path
+                # Run the input script as the original user for proper autocompletion
+                if [ -n "$SUDO_USER" ]; then
+                    iso_path=$(sudo -u "$SUDO_USER" bash -c "$TMP_SCRIPT")
+                else
+                    iso_path=$("$TMP_SCRIPT")
+                fi
                 
                 # Better path handling - handle relative paths and tilde expansion
                 if [[ "$iso_path" == ~* ]]; then
@@ -468,21 +536,42 @@ main() {
                 show_message "Looking for ISO at: $iso_path" "$BLUE"
                 
                 if verify_iso "$iso_path"; then
+                    # Clean up the temp script on success
+                    rm -f "$TMP_SCRIPT"
                     break
                 else
                     show_message "Please provide a valid path." "$RED"
                 fi
             done
             
+            # Variable to store operation result
+            operation_success=false
+            
             case "$os_choice" in
-                "1") create_linux_usb "$usb_drive" "$iso_path" ;;
-                "2") create_windows_usb "$usb_drive" "$iso_path" ;;
-                "4") create_custom_usb "$usb_drive" "$iso_path" ;;
+                "1") 
+                    if create_linux_usb "$usb_drive" "$iso_path"; then
+                        operation_success=true
+                    fi
+                    ;;
+                "2") 
+                    if create_windows_usb "$usb_drive" "$iso_path"; then
+                        operation_success=true
+                    fi
+                    ;;
+                "4") 
+                    if create_custom_usb "$usb_drive" "$iso_path"; then
+                        operation_success=true
+                    fi
+                    ;;
             esac
             ;;
         "3")
             # Install Ventoy
-            install_ventoy "$usb_drive"
+            if install_ventoy "$usb_drive"; then
+                operation_success=true
+            else
+                operation_success=false
+            fi
             ;;
         *)
             show_message "Invalid option: $os_choice" "$RED"
@@ -490,48 +579,63 @@ main() {
             ;;
     esac
     
-    # Explicitly capture operation result to prevent premature script exit
-    operation_result=$?
-    
-    # Check if the operation was successful
-    if [ $operation_result -ne 0 ]; then
-        show_message "There was an error during the operation." "$RED"
+    if [ "$operation_success" = "true" ]; then
+        show_message "===== SUMMARY =====" "$GREEN"
+        show_message "Operation completed on drive: $usb_drive" "$GREEN"
+        
+        case "$os_choice" in
+            "1") 
+                show_message "Operating system: Linux" "$GREEN"
+                show_message "Image used: $iso_path" "$GREEN"
+                if [ -f "$iso_path" ]; then
+                    show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
+                fi
+                ;;
+            "2") 
+                show_message "Operating system: Windows" "$GREEN"
+                show_message "Image used: $iso_path" "$GREEN"
+                if [ -f "$iso_path" ]; then
+                    show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
+                fi
+                ;;
+            "3") 
+                show_message "Ventoy installation completed" "$GREEN"
+                show_message "You can copy multiple ISOs to the Ventoy partition" "$GREEN"
+                ;;
+            "4") 
+                show_message "Custom image" "$GREEN"
+                show_message "Image used: $iso_path" "$GREEN"
+                if [ -f "$iso_path" ]; then
+                    show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
+                fi
+                ;;
+        esac
+        
+        echo ""
+        show_message "Process completed! The USB drive is ready to use." "$GREEN"
+    else
+        show_message "===== SUMMARY =====" "$RED"
+        show_message "Operation FAILED on drive: $usb_drive" "$RED"
+        
+        case "$os_choice" in
+            "1") 
+                show_message "Failed to create Linux bootable USB" "$RED"
+                ;;
+            "2") 
+                show_message "Failed to create Windows bootable USB" "$RED"
+                ;;
+            "3") 
+                show_message "Failed to install Ventoy" "$RED"
+                ;;
+            "4") 
+                show_message "Failed to create bootable USB with custom image" "$RED"
+                ;;
+        esac
+        
+        echo ""
+        show_message "Process failed! Please check the error messages above." "$RED"
         exit 1
     fi
-    
-    show_message "===== SUMMARY =====" "$GREEN"
-    show_message "Operation completed on drive: $usb_drive" "$GREEN"
-    
-    case "$os_choice" in
-        "1") 
-            show_message "Operating system: Linux" "$GREEN"
-            show_message "Image used: $iso_path" "$GREEN"
-            if [ -f "$iso_path" ]; then
-                show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
-            fi
-            ;;
-        "2") 
-            show_message "Operating system: Windows" "$GREEN"
-            show_message "Image used: $iso_path" "$GREEN"
-            if [ -f "$iso_path" ]; then
-                show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
-            fi
-            ;;
-        "3") 
-            show_message "Ventoy installation completed" "$GREEN"
-            show_message "You can copy multiple ISOs to the Ventoy partition" "$GREEN"
-            ;;
-        "4") 
-            show_message "Custom image" "$GREEN"
-            show_message "Image used: $iso_path" "$GREEN"
-            if [ -f "$iso_path" ]; then
-                show_message "Image size: $(du -h "$iso_path" | cut -f1)" "$GREEN"
-            fi
-            ;;
-    esac
-    
-    echo ""
-    show_message "Process completed! The USB drive is ready to use." "$GREEN"
 }
 
 # Execute the main function
